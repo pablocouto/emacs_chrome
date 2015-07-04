@@ -68,8 +68,8 @@
 ;;; Code:
 
 ;; uncomment to debug
-;; (setq debug-on-error t)
-;; (setq edebug-all-defs t)
+(setq debug-on-error t)
+(setq edebug-all-defs t)
 
 (unless (featurep 'make-network-process)
   (error "Incompatible version of [X]Emacs - lacks make-network-process"))
@@ -223,6 +223,11 @@ Depending on the character encoding, may be different from the buffer length.")
   "The value gotten from the HTTP `x-file' header.")
 (make-variable-buffer-local 'edit-server-file)
 (put 'edit-server-file 'permanent-local t)
+
+(defvar edit-server-point nil
+  "The value gotten from the HTTP `x-point' header.")
+(make-variable-buffer-local 'edit-server-point)
+(put 'edit-server-point 'permanent-local t)
 
 ;;; Mode magic
 ;;
@@ -388,12 +393,14 @@ non-nil, then STRING is also echoed to the message line."
   ;; data in the buffer and process it in different phases, which
   ;; requires us to keep track of the processing state.
   (with-current-buffer (process-buffer proc)
+
     (insert string)
     (setq edit-server-received
 	  (+ edit-server-received (string-bytes string)))
     (when (eq edit-server-phase 'wait)
       ;; look for a complete HTTP request string
       (save-excursion
+    (copy-to-buffer "*scratch*" (point-min) (point-max)) ; debug
 	(goto-char (point-min))
 	(when (re-search-forward
 	       "^\\([A-Z]+\\)\\s-+\\(\\S-+\\)\\s-+\\(HTTP/[0-9\.]+\\)\r?\n"
@@ -423,7 +430,14 @@ non-nil, then STRING is also echoed to the message line."
 	(goto-char (point-min))
 	(when (re-search-forward "^x-file: \\([^\r\n]+\\)" nil t)
 	  (edit-server-log proc "Found x-file: %s" (match-string 1))
-	  (setq edit-server-file (match-string 1))))
+    (setq edit-server-file (match-string 1))))
+      ;; look for "x-point" header
+      (save-excursion
+  (goto-char (point-min))
+  (when (re-search-forward "^x-point: \\([0-9]+\\)" nil t)
+    (edit-server-log proc "Found x-point: %s" (match-string 1))
+    (setq edit-server-point
+    (string-to-number (match-string 1)))))
       ;; look for head/body separator
       (save-excursion
 	(goto-char (point-min))
@@ -435,8 +449,8 @@ non-nil, then STRING is also echoed to the message line."
 	  ;; discard headers - keep only HTTP content in buffer
 	  (delete-region (point-min) (match-end 0))
 	  (edit-server-log proc
-			   "Processed headers, length: %s, url: %s, file: %s"
-			   edit-server-content-length edit-server-url edit-server-file)
+         "Processed headers, length: %s, url: %s, file: %s, point: %s"
+         edit-server-content-length edit-server-url edit-server-file edit-server-point)
 	  (setq edit-server-phase 'body))))
 
     (when (eq edit-server-phase 'body)
@@ -453,7 +467,7 @@ non-nil, then STRING is also echoed to the message line."
 	  (edit-server-kill-client proc))
 	 ((string= edit-server-request "POST")
 	  ;; create editing buffer, and move content to it
-	  (edit-server-find-or-create-edit-buffer proc edit-server-file))
+    (edit-server-find-or-create-edit-buffer proc edit-server-file edit-server-point))
 	 (t
 	  ;; send 200 OK response to any other request
 	  (edit-server-send-response proc "edit-server is running.\n")
@@ -512,7 +526,7 @@ to `edit-server-default-major-mode'"
                               edit-server-url-major-mode-alist 'string-match)
                edit-server-default-major-mode)))
 
-(defun edit-server-find-or-create-edit-buffer (proc &optional existing)
+(defun edit-server-find-or-create-edit-buffer (proc &optional existing orig-point)
   "Find and existing or create an new edit buffer, place content in it
 and save the network process for the final call back"
   ;; FIXME: `existing' is useless: see issue #104.
@@ -521,9 +535,10 @@ and save the network process for the final call back"
 				      (or edit-server-url
 					  edit-server-edit-buffer-name)))))
 
+
     (edit-server-log proc
-		     "using buffer %s for edit (existing-buffer is %s)"
-		     buffer existing-buffer)
+         "using buffer %s for edit (existing-buffer is %s), point: %s"
+         buffer existing-buffer orig-point)
 
     ;; set multi-byte for proper UTF-8 handling (djb)
     (when (fboundp 'set-buffer-multibyte)
@@ -537,6 +552,8 @@ and save the network process for the final call back"
     ;; sent back to the browser. As a kludge I save the returned contents
     ;; in the kill-ring.
     (when existing-buffer
+      (setq edit-server-point (point))
+      (edit-server-log proc "point at: %s" edit-server-point)
       (kill-ring-save (point-min) (point-max)))
 
     (edit-server-log proc "copying new data into buffer")
@@ -553,6 +570,8 @@ and save the network process for the final call back"
       (set-buffer-modified-p 'nil)
       (add-hook 'kill-buffer-hook 'edit-server-abort* nil t)
       (buffer-enable-undo)
+      (when orig-point
+      (goto-char orig-point))
       (setq edit-server-proc proc
 	    edit-server-frame (edit-server-show-edit-buffer buffer))
       (edit-server-edit-mode))))
@@ -565,9 +584,12 @@ Optional second argument BODY specifies the response content:
     - Any other value will cause the contents of the current
       buffer to be sent.
 If optional third argument progress is non-nil, then the response
-will include x-file and x-open headers to allow continuation of editing."
+will include x-file, x-open and x-point headers to allow continuation
+of editing."
   (interactive)
   (edit-server-log proc "sending edit-server response")
+  (when progress
+  (edit-server-log proc (format "sending point: %s" (number-to-string (point)))))
   (if (processp proc)
       (let ((response-header (concat
 			      "HTTP/1.0 200 OK\n"
@@ -577,7 +599,8 @@ will include x-file and x-open headers to allow continuation of editing."
 			       "%a, %d %b %Y %H:%M:%S GMT\n"
 			       (current-time))
 			      (when progress
-				(format "x-file: %s\nx-open: true\n" (buffer-name))))))
+              (format "x-file: %s\nx-point: %s\nx-open: true\n"
+                      (buffer-name) (number-to-string (point)))))))
 	(process-send-string proc response-header)
 	(process-send-string proc "\n")
 	(cond

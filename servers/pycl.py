@@ -108,6 +108,7 @@ class Handler(BaseHTTPRequestHandler):
 
 			saved = False
 			rc = None
+			point = 0
 			while (True):
 				time.sleep(1)
 				rc = p.poll()
@@ -116,6 +117,9 @@ class Handler(BaseHTTPRequestHandler):
 				if mod_time != last_mod_time:
 					print "new mod time:", mod_time, " last:", last_mod_time
 					last_mod_time = mod_time
+					point = self.headers.getheader('x-point')
+					print "pint"
+					print point
 					saved = True
 				if saved: break
 
@@ -134,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
 
 			if saved:
 				self.send_header('x-open', "true")
+				self.send_header('x-point', str(point))
 			else:
 				try:
 					os.unlink(fname)

@@ -92,6 +92,7 @@ function handleContentMessages(msg, tab_port)
     var id = msg.id;
     var text = msg.text;
     var file = msg.file;
+    var point = msg.point;
 
     var page_url = tab_port.sender.tab.url;
     var page_port = tab_port.portId_;
@@ -109,7 +110,8 @@ function handleContentMessages(msg, tab_port)
             if (xhr.status == 200) {
                 xfile = xhr.getResponseHeader("x-file");
                 xopen = xhr.getResponseHeader("x-open");
-                console.log("x-file: "+xfile+" x-open: "+xopen);
+                xpoint = xhr.getResponseHeader("x-point");
+                console.log("x-file: "+xfile+" x-open: "+xopen+" x-point: "+xpoint);
 
                 var update_msg = {
                     msg: "update",
@@ -122,6 +124,7 @@ function handleContentMessages(msg, tab_port)
 
                 msg.text = xhr.responseText;
                 msg.file = xfile;
+                msg.point = xpoint;
                 if(xopen == "true") {
                     handleContentMessages(msg, tab_port);
                 }
@@ -159,6 +162,7 @@ function handleContentMessages(msg, tab_port)
     xhr.setRequestHeader("x-url", page_url);
     xhr.setRequestHeader("x-id", id);
     xhr.setRequestHeader("x-file", file);
+    xhr.setRequestHeader("x-point", point);
     xhr.send(text);
 }
 
